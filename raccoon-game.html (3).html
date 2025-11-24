@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>너구리 게임 - 레트로 아케이드</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        // ==========================================
+        // 🔥 여기에 Firebase 설정을 입력하세요!
+        // ==========================================
+        const firebaseConfig = {
+          apiKey: "AIzaSyCxi4YK_WxD-Hcdse36bPd5Vn0RI9ckEUQ",
+  authDomain: "nook-74881.firebaseapp.com",
+  projectId: "nook-74881",
+  storageBucket: "nook-74881.firebasestorage.app",
+  messagingSenderId: "315054228796",
+  appId: "1:315054228796:web:8356fcf364741519e40a39",
+  measurementId: "G-NP5VK20HS0" "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Firebase 초기화
+        let database;
+        try {
+            if (!firebase.apps.length) {
+                firebase.initializeApp(firebaseConfig);
+            }
+            database = firebase.database();
+        } catch (error) {
+            console.error("Firebase 초기화 오류:", error);
+        }
+
+        const RaccoonGame = () => {
+            const GRID_SIZE = 15;
+            const CELL_SIZE = 40;
+            
+            const [gameState, setGameState] = useState('menu');
+            const [level, setLevel] = useState(1);
+            const [score, setScore] = useState(0);
+            const [lives, setLives] = useState(3);
+            const [playerPos, setPlayerPos] = useState({ x: 1, y: 1 });
+            const [fruits, setFruits] = useState([]);
+            const [tacks, setTacks] = useState([]);
+            const [invincible, setInvincible] = useState(false);
+            const [rankings, setRankings] = useState([]);
+            const [playerName, setPlayerName] = useState('');
+            const [showNameInput, setShowNameInput] = useState(false);
+            const [isSubmitting, setIsSubmitting] = useState(false);
+            const [firebaseError, setFirebaseError] = useState(false);
+
+            // 랭킹 불러오기
+            const loadRankings = async () => {
+                if (!database) {
+                    setFirebaseError(true);
+                    return;
+                }
+                
+                try {
+                    const rankingsRef = database.ref('rankings');
+                    const snapshot = await rankingsRef.orderByChild('score').limitToLast(10).once('value');
+                    
+                    if (snapshot.exists()) {
+                        const data = snapshot.val();
+                        const rankingsArray = Object.keys(data).map(key => ({
+                            id: key,
+                            ...data[key]
+                        }));
+                        
+                        rankingsArray.sort((a, b) => b.score - a.score);
+                        setRankings(rankingsArray);
+                    } else {
+                        setRankings([]);
+                    }
+                    setFirebaseError(false);
+                } catch (err) {
+                    console.error("랭킹 불러오기 실패:", err);
+                    setFirebaseError(true);
+                    setRankings([]);
+                }
+            };
+
+            // 랭킹 저장하기
+            const saveRanking = async (name, finalScore, finalLevel) => {
+                if (!database) {
+                    alert("Firebase가 설정되지 않았습니다. firebaseConfig를 확인해주세요.");
+                    setShowNameInput(false);
+                    return;
+                }
+                
+                setIsSubmitting(true);
+                try {
+                    const rankingsRef = database.ref('rankings');
+                    const newRankingRef = rankingsRef.push();
+                    
+                    await newRankingRef.set({
+                        name: name,
+                        score: finalScore,
+                        level: finalLevel,
+                        timestamp: Date.now()
+                    });
+                    
+                    await loadRankings();
+                    setShowNameInput(false);
+                    setIsSubmitting(false);
+                } catch (err) {
+                    console.error("랭킹 저장 실패:", err);
+                    alert("랭킹 저장에 실패했습니다. Firebase 설정을 확인해주세요.");
+                    setIsSubmitting(false);
+                }
+            };
+
+            // 게임 시작 시 랭킹 불러오기
+            useEffect(() => {
+                loadRankings();
+            }, []);
+
+            // 레벨 초기화
+            const initLevel = useCallback((levelNum) => {
+                const newFruits = [];
+                const newTacks = [];
+                
+                const fruitCount = 5 + levelNum * 2;
+                for (let i = 0; i < fruitCount; i++) {
+                    let pos;
+                    do {
+                        pos = {
+                            x: Math.floor(Math.random() * (GRID_SIZE - 2)) + 1,
+                            y: Math.floor(Math.random() * (GRID_SIZE - 2)) + 1
+                        };
+                    } while (
+                        (pos.x === 1 && pos.y === 1) ||
+                        newFruits.some(f => f.x === pos.x && f.y === pos.y)
+                    );
+                    newFruits.push(pos);
+                }
+                
+                const tackCount = 8 + levelNum * 3;
+                for (let i = 0; i < tackCount; i++) {
+                    let pos;
+                    do {
+                        pos = {
+                            x: Math.floor(Math.random() * (GRID_SIZE - 2)) + 1,
+                            y: Math.floor(Math.random() * (GRID_SIZE - 2)) + 1
+                        };
+                    } while (
+                        (pos.x === 1 && pos.y === 1) ||
+                        newFruits.some(f => f.x === pos.x && f.y === pos.y) ||
+                        newTacks.some(t => t.x === pos.x && t.y === pos.y)
+                    );
+                    newTacks.push(pos);
+                }
+                
+                setFruits(newFruits);
+                setTacks(newTacks);
+                setPlayerPos({ x: 1, y: 1 });
+            }, []);
+
+            // 게임 시작
+            const startGame = () => {
+                setGameState('playing');
+                setLevel(1);
+                setScore(0);
+                setLives(3);
+                setPlayerName('');
+                setShowNameInput(false);
+                initLevel(1);
+            };
+
+            // 키보드 조작
+            useEffect(() => {
+                if (gameState !== 'playing') return;
+
+                const handleKeyPress = (e) => {
+                    const { x, y } = playerPos;
+                    let newX = x;
+                    let newY = y;
+
+                    switch(e.key) {
+                        case 'ArrowUp':
+                            newY = Math.max(0, y - 1);
+                            break;
+                        case 'ArrowDown':
+                            newY = Math.min(GRID_SIZE - 1, y + 1);
+                            break;
+                        case 'ArrowLeft':
+                            newX = Math.max(0, x - 1);
+                            break;
+                        case 'ArrowRight':
+                            newX = Math.min(GRID_SIZE - 1, x + 1);
+                            break;
+                        default:
+                            return;
+                    }
+
+                    e.preventDefault();
+                    setPlayerPos({ x: newX, y: newY });
+                };
+
+                window.addEventListener('keydown', handleKeyPress);
+                return () => window.removeEventListener('keydown', handleKeyPress);
+            }, [playerPos, gameState]);
+
+            // 충돌 체크 및 아이템 수집
+            useEffect(() => {
+                if (gameState !== 'playing') return;
+
+                const fruitIndex = fruits.findIndex(f => f.x === playerPos.x && f.y === playerPos.y);
+                if (fruitIndex !== -1) {
+                    setFruits(fruits.filter((_, i) => i !== fruitIndex));
+                    setScore(score + 100);
+                    
+                    if (fruits.length === 1) {
+                        setTimeout(() => {
+                            setLevel(level + 1);
+                            initLevel(level + 1);
+                            setScore(score + 500);
+                        }, 300);
+                    }
+                }
+
+                if (!invincible) {
+                    const hitTack = tacks.some(t => t.x === playerPos.x && t.y === playerPos.y);
+                    if (hitTack) {
+                        setLives(lives - 1);
+                        setInvincible(true);
+                        
+                        if (lives <= 1) {
+                            setGameState('lost');
+                            setShowNameInput(true);
+                        } else {
+                            setTimeout(() => {
+                                setInvincible(false);
+                            }, 1000);
+                        }
+                    }
+                }
+            }, [playerPos, fruits, tacks, gameState, score, lives, level, invincible, initLevel]);
+
+            // 게임 화면 렌더링
+            const renderGrid = () => {
+                const cells = [];
+                
+                for (let y = 0; y < GRID_SIZE; y++) {
+                    for (let x = 0; x < GRID_SIZE; x++) {
+                        const isPlayer = playerPos.x === x && playerPos.y === y;
+                        const isFruit = fruits.some(f => f.x === x && f.y === y);
+                        const isTack = tacks.some(t => t.x === x && t.y === y);
+                        const isWall = x === 0 || y === 0 || x === GRID_SIZE - 1 || y === GRID_SIZE - 1;
+                        
+                        cells.push(
+                            React.createElement('div', {
+                                key: `${x}-${y}`,
+                                style: {
+                                    width: CELL_SIZE,
+                                    height: CELL_SIZE,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '24px',
+                                    backgroundColor: isWall ? '#8B4513' : '#90EE90',
+                                    border: '1px solid #006400',
+                                    opacity: invincible && isPlayer ? (Date.now() % 400 < 200 ? 0.3 : 1) : 1,
+                                }
+                            },
+                                isPlayer && '🦝',
+                                isFruit && '🍎',
+                                isTack && '📍'
+                            )
+                        );
+                    }
+                }
+                
+                return cells;
+            };
+
+            return React.createElement('div', {
+                style: { 
+                    width: '100vw', 
+                    height: '100vh', 
+                    display: 'flex', 
+                    flexDirection: 'column',
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    backgroundColor: '#1a1a2e',
+                    fontFamily: 'Arial, sans-serif',
+                    color: 'white'
+                }
+            },
+                gameState === 'menu' && React.createElement('div', { style: { textAlign: 'center' } },
+                    React.createElement('h1', { 
+                        style: { fontSize: '48px', marginBottom: '20px', color: '#FFD700' }
+                    }, '🦝 너구리 게임 🍎'),
+                    
+                    firebaseError && React.createElement('div', {
+                        style: {
+                            backgroundColor: 'rgba(255, 107, 107, 0.2)',
+                            border: '2px solid #FF6B6B',
+                            borderRadius: '10px',
+                            padding: '15px',
+                            marginBottom: '20px',
+                            maxWidth: '500px',
+                            margin: '0 auto 20px auto'
+                        }
+                    },
+                        React.createElement('p', { style: { fontSize: '16px', color: '#FF6B6B' } }, 
+                            '⚠️ Firebase 연결 오류: firebaseConfig를 확인해주세요')
+                    ),
+                    
+                    rankings.length > 0 && React.createElement('div', {
+                        style: {
+                            backgroundColor: 'rgba(255, 215, 0, 0.1)',
+                            border: '2px solid #FFD700',
+                            borderRadius: '10px',
+                            padding: '20px',
+                            marginBottom: '30px',
+                            maxWidth: '500px',
+                            margin: '0 auto 30px auto'
+                        }
+                    },
+                        React.createElement('h2', { 
+                            style: { fontSize: '28px', marginBottom: '15px', color: '#FFD700' }
+                        }, '🏆 명예의 전당 🏆'),
+                        ...rankings.slice(0, 5).map((rank, index) =>
+                            React.createElement('div', {
+                                key: rank.id || index,
+                                style: {
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    padding: '10px',
+                                    marginBottom: '5px',
+                                    backgroundColor: index === 0 ? 'rgba(255, 215, 0, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                                    borderRadius: '5px',
+                                    fontSize: '18px'
+                                }
+                            },
+                                React.createElement('span', null, `${index + 1}. ${rank.name}`),
+                                React.createElement('span', null, `${rank.score}점 (Lv.${rank.level})`)
+                            )
+                        )
+                    ),
+                    
+                    React.createElement('p', { 
+                        style: { fontSize: '20px', marginBottom: '30px' }
+                    }, '압정을 피하고 과일을 모두 먹으세요!'),
+                    React.createElement('div', { 
+                        style: { marginBottom: '30px', textAlign: 'left', display: 'inline-block' }
+                    },
+                        React.createElement('p', null, '🦝 너구리: 플레이어'),
+                        React.createElement('p', null, '🍎 과일: 100점 (모두 먹으면 다음 스테이지!)'),
+                        React.createElement('p', null, '📍 압정: 닿으면 생명 -1'),
+                        React.createElement('p', null, '⌨️ 화살표 키로 조작')
+                    ),
+                    React.createElement('br'),
+                    React.createElement('button', {
+                        onClick: startGame,
+                        style: {
+                            padding: '15px 40px',
+                            fontSize: '24px',
+                            backgroundColor: '#FFD700',
+                            border: 'none',
+                            borderRadius: '10px',
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            color: '#1a1a2e'
+                        }
+                    }, '🎮 게임 시작')
+                ),
+
+                gameState === 'playing' && React.createElement('div', null,
+                    React.createElement('div', { 
+                        style: { 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            marginBottom: '20px',
+                            fontSize: '24px',
+                            fontWeight: 'bold'
+                        }
+                    },
+                        React.createElement('div', { style: { display: 'flex', gap: '30px' } },
+                            React.createElement('span', null, `⭐ 레벨: ${level}`),
+                            React.createElement('span', null, `🏆 점수: ${score}`),
+                            React.createElement('span', null, `❤️ 생명: ${lives}`)
+                        ),
+                        React.createElement('div', null, `🍎 남은 과일: ${fruits.length}`)
+                    ),
+                    
+                    React.createElement('div', { 
+                        style: { 
+                            display: 'grid', 
+                            gridTemplateColumns: `repeat(${GRID_SIZE}, ${CELL_SIZE}px)`,
+                            gap: '0',
+                            border: '4px solid #FFD700',
+                            boxShadow: '0 0 30px rgba(255, 215, 0, 0.5)'
+                        }
+                    }, renderGrid()),
+                    
+                    React.createElement('div', { 
+                        style: { 
+                            marginTop: '20px', 
+                            textAlign: 'center',
+                            fontSize: '16px',
+                            color: '#aaa'
+                        }
+                    }, '⌨️ 화살표 키로 너구리를 움직이세요!')
+                ),
+
+                gameState === 'lost' && React.createElement('div', { style: { textAlign: 'center' } },
+                    React.createElement('h1', { style: { fontSize: '48px', color: '#FF6B6B' } }, '게임 오버!'),
+                    React.createElement('p', { 
+                        style: { fontSize: '32px', margin: '30px 0' }
+                    }, `최종 점수: ${score}`),
+                    React.createElement('p', { 
+                        style: { fontSize: '24px', marginBottom: '30px' }
+                    }, `레벨 ${level}까지 도달했습니다!`),
+                    
+                    showNameInput && React.createElement('div', {
+                        style: {
+                            backgroundColor: 'rgba(255, 215, 0, 0.1)',
+                            border: '2px solid #FFD700',
+                            borderRadius: '10px',
+                            padding: '20px',
+                            marginBottom: '20px',
+                            maxWidth: '400px',
+                            margin: '0 auto 20px auto'
+                        }
+                    },
+                        React.createElement('p', { 
+                            style: { fontSize: '20px', marginBottom: '15px' }
+                        }, '🎮 랭킹에 등록하기'),
+                        React.createElement('input', {
+                            type: 'text',
+                            placeholder: '이름을 입력하세요',
+                            value: playerName,
+                            onChange: (e) => setPlayerName(e.target.value),
+                            maxLength: 20,
+                            style: {
+                                width: '100%',
+                                padding: '10px',
+                                fontSize: '18px',
+                                borderRadius: '5px',
+                                border: '2px solid #FFD700',
+                                backgroundColor: '#1a1a2e',
+                                color: 'white',
+                                marginBottom: '15px',
+                                boxSizing: 'border-box'
+                            },
+                            onKeyPress: (e) => {
+                                if (e.key === 'Enter' && playerName.trim() && !isSubmitting) {
+                                    saveRanking(playerName.trim(), score, level);
+                                }
+                            }
+                        }),
+                        React.createElement('button', {
+                            onClick: () => {
+                                if (playerName.trim() && !isSubmitting) {
+                                    saveRanking(playerName.trim(), score, level);
+                                }
+                            },
+                            disabled: !playerName.trim() || isSubmitting,
+                            style: {
+                                width: '100%',
+                                padding: '10px 20px',
+                                fontSize: '18px',
+                                backgroundColor: (!playerName.trim() || isSubmitting) ? '#666' : '#4CAF50',
+                                border: 'none',
+                                borderRadius: '5px',
+                                cursor: (!playerName.trim() || isSubmitting) ? 'not-allowed' : 'pointer',
+                                fontWeight: 'bold',
+                                color: 'white'
+                            }
+                        }, isSubmitting ? '저장 중...' : '랭킹 등록'),
+                        React.createElement('button', {
+                            onClick: () => setShowNameInput(false),
+                            disabled: isSubmitting,
+                            style: {
+                                width: '100%',
+                                padding: '8px 20px',
+                                fontSize: '16px',
+                                backgroundColor: 'transparent',
+                                border: '1px solid #666',
+                                borderRadius: '5px',
+                                cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                                color: '#aaa',
+                                marginTop: '10px'
+                            }
+                        }, '건너뛰기')
+                    ),
+                    
+                    !showNameInput && React.createElement('button', {
+                        onClick: startGame,
+                        style: {
+                            padding: '15px 40px',
+                            fontSize: '24px',
+                            backgroundColor: '#FFD700',
+                            border: 'none',
+                            borderRadius: '10px',
+                            cursor: 'pointer',
+                            fontWeight: 'bold',
+                            color: '#1a1a2e'
+                        }
+                    }, '다시 시작')
+                )
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(RaccoonGame));
+    </script>
+</body>
+</html>
